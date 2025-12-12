@@ -6,7 +6,7 @@
 - `script3_loggrep.sh` — ищет ключевое слово в лог-файле, сохраняет найденные строки и их количество.
 
 ## Подготовка
-Выдайте права на исполнение: `chmod +x script1_diff_report.sh script2_sysmon.sh script3_loggrep.sh`
+- Выдайте права на исполнение: `chmod +x script1_diff_report.sh script2_sysmon.sh script3_loggrep.sh`
 ---
 
 ## Скрипт 1: script1_diff_report.sh
