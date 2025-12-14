@@ -1,0 +1,210 @@
+---
+- name: Install and configure Nginx (Alpine/OpenRC)
+  hosts: nginx
+  gather_facts: true
+  vars:
+    image_name: "clown.png"
+
+  tasks:
+    - name: Install Nginx
+      apk:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: Ensure nginx system user exists (usually created by package)
+      user:
+        name: nginx
+        system: yes
+        state: present
+
+    - name: Ensure required directories with proper ownership
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /var/www/html, owner: root, group: root, mode: "0755" }
+        - { path: /run/nginx, owner: nginx, group: nginx, mode: "0755" }
+        - { path: /var/lib/nginx, owner: nginx, group: nginx, mode: "0755" }
+        - { path: /var/lib/nginx/tmp, owner: nginx, group: nginx, mode: "0755" }
+        - {
+            path: /var/lib/nginx/tmp/client_body,
+            owner: nginx,
+            group: nginx,
+            mode: "0755",
+          }
+        - {
+            path: /var/lib/nginx/tmp/proxy,
+            owner: nginx,
+            group: nginx,
+            mode: "0755",
+          }
+        - {
+            path: /var/lib/nginx/tmp/fastcgi,
+            owner: nginx,
+            group: nginx,
+            mode: "0755",
+          }
+        - {
+            path: /var/lib/nginx/tmp/uwsgi,
+            owner: nginx,
+            group: nginx,
+            mode: "0755",
+          }
+        - {
+            path: /var/lib/nginx/tmp/scgi,
+            owner: nginx,
+            group: nginx,
+            mode: "0755",
+          }
+        - { path: /var/tmp/nginx, owner: nginx, group: nginx, mode: "0755" }
+        - { path: /var/log/nginx, owner: nginx, group: nginx, mode: "0755" }
+
+    - name: Touch log files with proper owner
+      copy:
+        dest: "{{ item }}"
+        content: ""
+        force: no
+        owner: nginx
+        group: nginx
+        mode: "0644"
+      loop:
+        - /var/log/nginx/error.log
+        - /var/log/nginx/access.log
+
+    - name: Decide nginx include dir
+      stat:
+        path: /etc/nginx/http.d
+      register: httpd
+    - stat:
+        path: /etc/nginx/conf.d
+      register: confd
+    - set_fact:
+        nginx_conf_dir: >-
+          {{ '/etc/nginx/http.d' if httpd.stat.exists else
+             '/etc/nginx/conf.d' if confd.stat.exists else
+             '/etc/nginx/http.d' }}
+    - file:
+        path: "{{ nginx_conf_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Deploy site config into include dir
+      copy:
+        src: "{{ playbook_dir }}/../Nginx/default.conf"
+        dest: "{{ nginx_conf_dir }}/default.conf"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Copy html of main page
+      copy:
+        src: "{{ playbook_dir }}/../Nginx/index.html"
+        dest: /var/www/html/index.html
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Copy image
+      copy:
+        src: "{{ playbook_dir }}/../Nginx/{{ image_name }}"
+        dest: "/var/www/html/{{ image_name }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Enable nginx at default runlevel (idempotent)
+      command: rc-update add nginx default
+      args:
+        creates: /etc/runlevels/default/nginx
+
+    - name: Test Nginx configuration (must pass)
+      shell: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Fail early if config test failed
+      fail:
+        msg: "{{ nginx_test.stderr | default(nginx_test.stdout) | default('nginx -t failed') }}"
+      when: nginx_test.rc != 0
+
+    # Перезапуск без гонок OpenRC: стоп -> очистка PID -> запуск напрямую
+    - name: Stop nginx via rc-service (tolerant)
+      shell: rc-service nginx stop || true
+      changed_when: true
+      failed_when: false
+
+    - name: Kill leftover nginx if any (tolerant)
+      shell: |
+        pkill -TERM nginx || true
+        sleep 1
+        pkill -KILL nginx || true
+      changed_when: true
+      failed_when: false
+
+    - name: Remove stale PID file
+      file:
+        path: /run/nginx/nginx.pid
+        state: absent
+
+    - name: Start nginx directly (daemonizes itself)
+      shell: nginx
+      register: nginx_start_direct
+      changed_when: true
+      failed_when: false
+
+    - name: Wait until Nginx listens on 80
+      shell: |
+        for i in $(seq 1 20); do
+          ss -lntp 2>/dev/null | grep -q ':80 ' && exit 0
+          netstat -lntp 2>/dev/null | grep -q ':80 ' && exit 0
+          sleep 0.5
+        done
+        exit 1
+      register: port_wait
+      changed_when: false
+      failed_when: false
+
+    - name: Wait until HTTP answers locally
+      shell: |
+        for i in $(seq 1 20); do
+          wget -q --spider http://127.0.0.1:80 && exit 0
+          sleep 0.5
+        done
+        exit 1
+      register: http_wait
+      changed_when: false
+      failed_when: false
+
+    - name: Diagnostics if needed
+      when: http_wait.rc != 0
+      shell: |
+        echo "--- rc-service nginx status ---"
+        rc-service nginx status || true
+        echo "--- processes ---"
+        ps -o pid,ppid,user,group,cmd -C nginx || pgrep -a nginx || true
+        echo "--- ports ---"
+        ss -lntp 2>/dev/null | grep ':80' || netstat -lntp 2>/dev/null | grep ':80' || true
+        echo "--- nginx -t ---"
+        nginx -t || true
+        echo "--- nginx -T (first 200 lines) ---"
+        nginx -T 2>&1 | sed -n '1,200p' || true
+        echo "--- error.log (tail) ---"
+        tail -n 200 /var/log/nginx/error.log 2>/dev/null || true
+      register: diag
+      changed_when: false
+
+    - name: Show diagnostics block
+      when: http_wait.rc != 0
+      debug:
+        msg: "{{ diag.stdout }}"
+
+    - name: Succeed only if HTTP answers
+      assert:
+        that:
+          - http_wait.rc == 0
+        fail_msg: "Nginx failed to answer on port 80. See diagnostics above."
+        success_msg: "Nginx is up and answering HTTP."
