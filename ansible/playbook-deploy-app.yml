@@ -1,0 +1,24 @@
+---
+- name: Deploy my app
+  hosts: myapp
+
+  tasks:
+    - name: Create directory
+      file:
+        path: /root/app
+        state: directory
+
+    - name: Copy files
+      copy:
+        src: ../app/hello.py
+        dest: /root/app/hello.py
+        mode: "0644"
+
+    - name: Copy script
+      copy:
+        src: ../app/app_run.sh
+        dest: /root/app/app_run.sh
+        mode: "0755"
+
+    - name: Run app
+      command: sh /root/app/app_run.sh

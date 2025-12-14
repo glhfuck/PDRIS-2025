@@ -1,0 +1,62 @@
+services:
+  alpine-main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ansible-alpine:latest
+    container_name: alpine-main
+    working_dir: /ansible
+    volumes:
+      - ./ansible:/ansible
+      - ./app:/app
+      - ./Nginx:/Nginx
+    networks:
+      - my_net
+    command: >
+      sh -c "
+        mkdir -p /run/openrc /run/sshd && touch /run/openrc/softlevel;
+        ssh-keygen -A || true;
+        /sbin/rc-update add sshd default || true;
+        /sbin/rc-service sshd restart || /sbin/rc-service sshd start || true;
+        exec /usr/sbin/sshd -D -e
+      "
+
+  alpine-1:
+    image: ansible-alpine:latest
+    container_name: alpine-1
+    networks:
+      - my_net
+    command: >
+      sh -c "
+        echo 'root:123' | chpasswd;
+        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config;
+        sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config;
+        mkdir -p /run/openrc /run/sshd && touch /run/openrc/softlevel;
+        ssh-keygen -A || true;
+        /sbin/rc-update add sshd default || true;
+        /sbin/rc-service sshd restart || /sbin/rc-service sshd start || true;
+        exec /usr/sbin/sshd -D -e
+      "
+
+  alpine-2:
+    image: ansible-alpine:latest
+    container_name: alpine-2
+    networks:
+      - my_net
+    ports:
+      - "8080:80"
+    command: >
+      sh -c "
+        echo 'root:123' | chpasswd;
+        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config;
+        sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config;
+        mkdir -p /run/openrc /run/sshd && touch /run/openrc/softlevel;
+        ssh-keygen -A || true;
+        /sbin/rc-update add sshd default || true;
+        /sbin/rc-service sshd restart || /sbin/rc-service sshd start || true;
+        exec /usr/sbin/sshd -D -e
+      "
+
+networks:
+  my_net:
+    driver: bridge
